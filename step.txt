@@ -1,0 +1,24 @@
+i have arch linux on my office server
+
+install the presetp 
+
+sudo pacman -S nasm qemu gcc make gdb xorriso grub
+
+installs the
+   nasm → assembly compiler
+    qemu → emulator (run your OS safely)
+    gcc → compile kernel (later)
+    gdb → debugging
+    xorriso → create bootable ISO
+    grub → for later stages
+
+
+Install cross compiler:
+
+sudo pacman -S gcc-multilib
+
+Folder structure 
+
+mkdir my-os
+cd my-os
+mkdir boot kernel build
