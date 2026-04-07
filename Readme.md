@@ -1,337 +1,154 @@
-# 🚀 Ubaid OS Bootloader Project
+# UbaidOS — x86 Protected-Mode Operating System
 
-## 📘 Overview
+## Overview
 
-This project is a **custom x86 bootloader** built from scratch using Assembly on **Arch Linux**.
-It demonstrates low-level system programming, BIOS interaction, and the foundations of operating system development.
+UbaidOS is a fully hand-written x86 operating system built from scratch in Assembly and C.
+It boots through a two-stage real-mode loader, enters 32-bit protected mode, and runs a
+freestanding C kernel with a complete hardware-interrupt subsystem — including a remapped 8259A PIC,
+a 256-entry IDT, an interrupt-driven keyboard driver, and a PIT-based timer.
 
 ---
 
-## 🛠️ Environment Setup (Arch Linux)
+## Environment Setup
 
-Install required tools:
+### Arch Linux
 
 ```bash
-sudo pacman -S nasm qemu gcc make gdb xorriso grub
-sudo pacman -S gcc-multilib
+sudo pacman -S nasm qemu gcc make gdb gcc-multilib
 ```
 
-### 📦 Tool Purpose
+### Ubuntu / Debian
 
-| Tool         | Purpose                       |
-| ------------ | ----------------------------- |
-| nasm         | Assembly compiler             |
-| qemu         | Emulator to run OS safely     |
-| gcc          | Compile kernel (future)       |
-| gdb          | Debugging                     |
-| xorriso      | Create bootable ISO           |
-| grub         | Advanced bootloader reference |
-| gcc-multilib | 32-bit support                |
+```bash
+sudo apt install nasm qemu-system-x86 gcc make gdb gcc-multilib
+```
+
+### Tool Reference
+
+| Tool         | Purpose                                      |
+| ------------ | -------------------------------------------- |
+| nasm         | Assembler — flat binary and ELF32 objects    |
+| gcc          | Cross-compiler for 32-bit freestanding C     |
+| gcc-multilib | 32-bit (`-m32`) support on 64-bit hosts      |
+| ld           | Linker — produces flat binary kernel         |
+| make         | Build system                                 |
+| qemu         | x86 system emulator                          |
+| gdb          | Source-level debugger (via QEMU remote stub) |
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```
 my-os/
 ├── boot/
-│   ├── boot.asm
-│   └── boot.bin
+│   ├── stage_1.asm          # Stage 1 — 512-byte MBR, loads stage 2 from disk
+│   ├── stage2.asm           # Stage 2 — GDT, A20, protected-mode entry, jumps to kernel
+│   ├── keyboard-input.asm   # Legacy real-mode keyboard helper (stage 2 only)
+│   └── print_my_name.asm    # Legacy real-mode print helper (stage 2 only)
+│
 ├── kernel/
-├── build/
+│   ├── kernel_entry.asm     # Protected-mode entry point, calls kernel_main
+│   ├── kernel.c             # Kernel main, shell, VGA terminal
+│   ├── linker.ld            # Flat binary layout — load/exec at 0x2000
+│   │
+│   ├── io.h                 # inb / outb / io_wait inline helpers
+│   │
+│   ├── idt.h                # idt_entry_t, idt_ptr_t, registers_t, idt_set_gate()
+│   ├── idt.c                # IDT table init — idt_init(), hooks all 256 entries
+│   │
+│   ├── isr.asm              # CPU exception stubs ISR0–ISR31 (NASM ELF32 macros)
+│   ├── irq.asm              # Hardware IRQ stubs IRQ0–IRQ15 (NASM ELF32 macros)
+│   │
+│   ├── pic.h                # PIC port constants, pic_remap(), pic_send_eoi()
+│   ├── pic.c                # 8259A PIC init — ICW1-4 sequence, EOI
+│   │
+│   ├── keyboard.h           # Key definitions, keyboard_init(), keyboard_readline_irq()
+│   ├── keyboard.c           # IRQ1 ring-buffer driver, scancode → ASCII
+│   │
+│   ├── timer.h              # timer_init(), timer_get_ticks()
+│   └── timer.c              # IRQ0 PIT driver — 100 Hz tick counter
+│
+└── build/                   # Generated — all .o files + kernel.bin + os.img
 ```
 
 ---
 
-## ⚙️ Build & Run
+## Build and Run
+
+All commands run from the `my-os/` directory.
 
 ```bash
-cd boot
-nasm -f bin my-os/boot/boot.asm -o my-os/build/boot.bin
-qemu-system-x86_64 -drive format=raw,file=my-os/build/boot.bin
+# Build everything (bootloader + kernel → floppy image)
+make
+
+# Run in QEMU
+make run
+
+# Open QEMU GDB stub on localhost:1234
+make debug
+
+# Remove all build artifacts
+make clean
+```
+
+### QEMU Invocation (what `make run` executes)
+
+```bash
+qemu-system-i386 \
+  -drive format=raw,file=build/os.img,if=floppy \
+  -boot a \
+  -m 32M
 ```
 
 ---
 
-## 🧠 Boot Process Explained
+## Boot Sequence
 
 ```
-BIOS → loads first 512 bytes → executes at memory address 0x7C00
-```
-
-### 📍 Memory Layout
-
-```
-0x0000:0x7C00 → Bootloader loaded here
-Buffer         → Stores user input
-Stack          → Default (not manually defined yet)
+BIOS
+ └─ loads 512-byte MBR (stage_1.asm) at 0x7C00
+     └─ reads stage2 sectors into 0x1000; jumps
+         └─ stage2 (real mode): loads GDT, enables A20, sets CR0[PE], far-jumps
+             └─ stage2 (32-bit): reads kernel sectors into 0x2000, jumps
+                 └─ kernel_entry.asm: sets DS/ES/FS/GS/SS = 0x10, ESP = 0x90000
+                     └─ kernel_main(): idt_init → pic_remap → keyboard_init → timer_init → sti → hlt loop
 ```
 
 ---
 
-## 🧾 Bootloader Code (Stage 1 Advanced)
+## Interrupt Architecture
 
-```asm
-[org 0x7c00]
-
-start:
-    call clear_screen
-
-    mov si, welcome_msg
-    call print_string
-
-    call new_line
-
-    mov si, input_msg
-    call print_string
-
-    call get_input
-
-    call new_line
-    mov si, result_msg
-    call print_string
-
-    mov si, buffer
-    call print_string
-
-hang:
-    jmp hang
-
-; =========================
-; PRINT STRING
-print_string:
-    mov ah, 0x0e
-    mov bh, 0x00
-    mov bl, 0x0A   ; Light green color
-.loop:
-    lodsb
-    cmp al, 0
-    je .done
-    int 0x10
-    jmp .loop
-.done:
-    ret
-
-; =========================
-; NEW LINE
-new_line:
-    mov ah, 0x0e
-    mov al, 0x0D
-    int 0x10
-    mov al, 0x0A
-    int 0x10
-    ret
-
-; =========================
-; CLEAR SCREEN
-clear_screen:
-    mov ah, 0x00
-    mov al, 0x03
-    int 0x10
-    ret
-
-; =========================
-; GET INPUT
-get_input:
-    mov di, buffer
-
-.input_loop:
-    mov ah, 0x00
-    int 0x16
-
-    cmp al, 13
-    je .done
-
-    stosb
-
-    mov ah, 0x0e
-    int 0x10
-
-    jmp .input_loop
-
-.done:
-    mov al, 0
-    stosb
-    ret
-
-; =========================
-; DATA
-welcome_msg db "=== UBAID OS BOOTLOADER ===",0
-input_msg   db "Enter your name: ",0
-result_msg  db "Hello, ",0
-
-buffer times 64 db 0
-
-; =========================
-; BOOT SIGNATURE
-times 510 - ($ - $$) db 0
-dw 0xaa55
-```
+| Component | Detail |
+|-----------|--------|
+| IDT | 256 entries; gate flags `0x8E` (32-bit interrupt gate, ring-0, present) |
+| PIC remap | IRQ0–7 → INT `0x20`–`0x27` (master), IRQ8–15 → INT `0x28`–`0x2F` (slave) |
+| IRQ0 | PIT timer — 100 Hz (`timer_init(100)`); `timer_get_ticks()` |
+| IRQ1 | PS/2 Keyboard — ring buffer driver; `keyboard_readline_irq()` |
+| ISR 0–31 | CPU exceptions (divide-by-zero, GPF, page fault …) |
+| EOI | `outb(0x20, 0x20)`; slave also `outb(0xA0, 0x20)` |
 
 ---
 
-## 🔍 Code Explanation (Line by Line Concepts)
+## Memory Map
 
-### `[org 0x7c00]`
+| Address | Content |
+|---------|---------|
+| `0x00000–0x003FF` | Real-mode IVT (BIOS) |
+| `0x07C00–0x07DFF` | Stage 1 — 512-byte MBR |
+| `0x01000–0x01FFF` | Stage 2 — loader / protected-mode entry |
+| `0x02000–…` | Kernel flat binary (load + exec address) |
+| `0x0B8000` | VGA text buffer — 80×25 colour cells |
+| `0x90000` | Stack top (`ESP` initial value) |
 
-* Tells assembler that code will run at memory address `0x7C00`
-
----
-
-### BIOS Interrupts Used
-
-#### 🎯 Display Output
-
-```asm
-int 0x10
-```
-
-* Prints characters to screen
-
-#### 🎯 Keyboard Input
-
-```asm
-int 0x16
-```
-
-* Reads key from keyboard
+GDT selectors: `0x08` = 32-bit code segment, `0x10` = data segment (base `0x0`, limit `0xFFFFFFFF`, ring-0).
 
 ---
 
-### Registers Used
+## Author
 
-| Register | Purpose           |
-| -------- | ----------------- |
-| SI       | Points to string  |
-| DI       | Points to buffer  |
-| AH       | Function selector |
-| AL       | Data register     |
+**Ubaid Bin Waris** — Systems Programmer
 
----
-
-### Buffer
-
-```asm
-buffer times 64 db 0
-```
-
-* Stores user input in memory
-* Max length: 64 characters
-
----
-
-## 🎨 Colors (Text Mode)
-
-| Color  | Code |
-| ------ | ---- |
-| Black  | 0x00 |
-| Blue   | 0x01 |
-| Green  | 0x02 |
-| Cyan   | 0x03 |
-| Red    | 0x04 |
-| Yellow | 0x0E |
-| White  | 0x0F |
-
----
-
-## 💡 Features Implemented
-
-* ✅ Text output
-* ✅ Colored text
-* ✅ User input
-* ✅ String handling
-* ✅ Screen clearing
-* ✅ Memory buffer
-
----
-
-## ⚔️ Bootloader Comparison
-
-### 🪟 Windows Bootloader
-
-* Closed source
-* UEFI-based
-* Complex & abstracted
-
----
-
-### 🐧 GRUB Bootloader
-
-* Multi-stage loader
-* Supports file systems
-* Loads multiple OS
-
----
-
-### 🚀 Ubaid Bootloader
-
-* Fully custom
-* Minimal & fast
-* Direct hardware control
-* Built for learning + extension
-
----
-
-## 🔥 Why This Project Matters
-
-Most developers:
-
-* ❌ Never interact with BIOS
-* ❌ Don’t understand memory at low level
-
-You:
-
-* ✅ Control hardware directly
-* ✅ Understand boot process deeply
-* ✅ Can build your own OS
-
----
-
-## 🧭 Next Steps
-
-### 🔹 Short Term
-
-* Add command system (mini terminal)
-* Implement backspace support
-* Add cursor control
-
-### 🔹 Mid Term
-
-* Load second stage bootloader
-* Read disk sectors
-
-### 🔹 Advanced
-
-* Switch to protected mode
-* Write kernel in C
-* Build full OS
-
----
-
-## 🧠 Learning Outcome
-
-This project teaches:
-
-* Assembly programming
-* Memory management
-* Hardware interaction
-* OS fundamentals
-
----
-
-## 📌 Author
-
-**Ubaid Bin Waris**
-Full Stack Engineer → Systems Programmer 🚀
-
----
-
-## ⭐ Final Note
-
-This is not just a project.
-
-This is:
-
-> Transition from **web developer → system engineer**
+[github.com/UbaidBinWaris](https://github.com/UbaidBinWaris)
 
 ---

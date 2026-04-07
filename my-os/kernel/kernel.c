@@ -8,6 +8,11 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "io.h"
+#include "idt.h"
+#include "pic.h"
+#include "keyboard.h"
+#include "timer.h"
 
 /* ============================================================
  *  SECTION 1 — VGA TEXT-MODE TERMINAL DRIVER
@@ -148,110 +153,6 @@ void terminal_print_hex(uint32_t n) {
 }
 
 /* ============================================================
- *  SECTION 2 — I/O PORT HELPERS
- * ============================================================ */
-
-static inline void outb(uint16_t port, uint8_t val) {
-    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port) : "memory");
-}
-
-static inline uint8_t inb(uint16_t port) {
-    uint8_t ret;
-    __asm__ volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port) : "memory");
-    return ret;
-}
-
-static inline void io_wait(void) {
-    outb(0x80, 0x00);
-}
-
-/* ============================================================
- *  SECTION 3 — PS/2 KEYBOARD DRIVER  (polling, scancode set 1)
- * ============================================================ */
-
-static const char scancode_to_ascii[] = {
-    0,    0,   '1', '2', '3', '4', '5', '6',    /* 0x00 – 0x07 */
-    '7', '8', '9', '0', '-', '=',  '\b', '\t',  /* 0x08 – 0x0F */
-    'q', 'w', 'e', 'r', 't', 'y', 'u', 'i',     /* 0x10 – 0x17 */
-    'o', 'p', '[', ']', '\n',  0,  'a', 's',     /* 0x18 – 0x1F */
-    'd', 'f', 'g', 'h', 'j', 'k', 'l', ';',     /* 0x20 – 0x27 */
-    '\'','`',  0,  '\\','z', 'x', 'c', 'v',     /* 0x28 – 0x2F */
-    'b', 'n', 'm', ',', '.', '/',  0,   '*',     /* 0x30 – 0x37 */
-    0,   ' '                                      /* 0x38 – 0x39 */
-};
-
-static const char scancode_to_shifted[] = {
-    0,    0,   '!', '@', '#', '$', '%', '^',
-    '&', '*', '(', ')', '_', '+',  '\b', '\t',
-    'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I',
-    'O', 'P', '{', '}', '\n',  0,  'A', 'S',
-    'D', 'F', 'G', 'H', 'J', 'K', 'L', ':',
-    '"', '~',  0,  '|', 'Z', 'X', 'C', 'V',
-    'B', 'N', 'M', '<', '>', '?',  0,   '*',
-    0,   ' '
-};
-
-static int shift_active = 0;
-static int caps_active  = 0;
-
-char keyboard_getchar(void) {
-    while (1) {
-        /* Wait until output buffer is full (bit 0 of status port 0x64) */
-        if (!(inb(0x64) & 0x01)) continue;
-
-        uint8_t sc = inb(0x60);
-
-        /* Key-release: high bit set */
-        if (sc & 0x80) {
-            uint8_t released = sc & 0x7F;
-            if (released == 0x2A || released == 0x36) shift_active = 0;
-            continue;
-        }
-
-        /* Left/right shift press */
-        if (sc == 0x2A || sc == 0x36) { shift_active = 1; continue; }
-        /* Caps Lock toggle */
-        if (sc == 0x3A) { caps_active = !caps_active; continue; }
-
-        /* Ignore unmapped scancodes */
-        if (sc >= sizeof(scancode_to_ascii)) continue;
-
-        char c = scancode_to_ascii[sc];
-        if (c == 0) continue;
-
-        /* Apply shift / caps for letters */
-        if (shift_active) {
-            c = scancode_to_shifted[sc];
-        } else if (caps_active && c >= 'a' && c <= 'z') {
-            c = (char)(c - 32);
-        }
-
-        return c;
-    }
-}
-
-/* Read a full line (echoed); returns number of chars written (excl. NUL) */
-int keyboard_readline(char *buf, int max) {
-    int pos = 0;
-    while (1) {
-        char c = keyboard_getchar();
-        if (c == '\n' || c == '\r') {
-            terminal_putchar('\n');
-            buf[pos] = '\0';
-            return pos;
-        } else if (c == '\b') {
-            if (pos > 0) {
-                pos--;
-                terminal_putchar('\b');
-            }
-        } else if (pos < max - 1) {
-            buf[pos++] = c;
-            terminal_putchar(c);
-        }
-    }
-}
-
-/* ============================================================
  *  SECTION 4 — STRING UTILITIES
  * ============================================================ */
 
@@ -385,7 +286,7 @@ static void shell_run(void) {
         terminal_print(":~$ ");
         terminal_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
 
-        keyboard_readline(cmd_buf, CMD_BUF_SIZE);
+        keyboard_readline_irq(cmd_buf, CMD_BUF_SIZE);
 
         terminal_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
         shell_dispatch(cmd_buf);
@@ -419,8 +320,11 @@ static void print_banner(void) {
 void kernel_main(void) {
     terminal_init();
     print_banner();
+    idt_init();
+    pic_remap(0x20, 0x28);
+    keyboard_init();
+    timer_init(100);
+    __asm__ volatile ("sti");
     shell_run();
-
-    /* Should never reach here */
     __asm__ volatile ("cli; hlt");
 }

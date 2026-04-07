@@ -50,11 +50,20 @@ KERNEL_ELF  := $(BUILD)/kernel.elf
 DISK_IMG    := $(BUILD)/os.img
 
 # ---------------------------------------------------------------------------
-# Kernel C sources (add new .c files here)
+# Kernel C sources
 # ---------------------------------------------------------------------------
-KERNEL_SRCS := $(KERNEL)/kernel.c
+KERNEL_SRCS := $(KERNEL)/kernel.c    \
+               $(KERNEL)/idt.c       \
+               $(KERNEL)/pic.c       \
+               $(KERNEL)/keyboard.c  \
+               $(KERNEL)/timer.c
 KERNEL_OBJS := $(patsubst $(KERNEL)/%.c, $(BUILD)/%.o, $(KERNEL_SRCS))
+
+# ---------------------------------------------------------------------------
+# Kernel ASM objects (ELF32 — ISR/IRQ stubs)
+# ---------------------------------------------------------------------------
 KERNEL_ENTRY_OBJ := $(BUILD)/kernel_entry.o
+KERNEL_ASM_OBJS  := $(BUILD)/isr.o $(BUILD)/irq.o
 
 # ---------------------------------------------------------------------------
 # Default target
@@ -98,6 +107,17 @@ $(KERNEL_ENTRY_OBJ): $(KERNEL)/kernel_entry.asm | $(BUILD)
 	$(NASM) -f elf32 $< -o $@
 
 # ---------------------------------------------------------------------------
+# ISR / IRQ stubs (ELF32)
+# ---------------------------------------------------------------------------
+$(BUILD)/isr.o: $(KERNEL)/isr.asm | $(BUILD)
+	@echo "[NASM ] $< → $@"
+	$(NASM) -f elf32 $< -o $@
+
+$(BUILD)/irq.o: $(KERNEL)/irq.asm | $(BUILD)
+	@echo "[NASM ] $< → $@"
+	$(NASM) -f elf32 $< -o $@
+
+# ---------------------------------------------------------------------------
 # Kernel C objects
 # ---------------------------------------------------------------------------
 $(BUILD)/%.o: $(KERNEL)/%.c | $(BUILD)
@@ -107,7 +127,7 @@ $(BUILD)/%.o: $(KERNEL)/%.c | $(BUILD)
 # ---------------------------------------------------------------------------
 # Link kernel → flat binary
 # ---------------------------------------------------------------------------
-$(KERNEL_BIN): $(KERNEL_ENTRY_OBJ) $(KERNEL_OBJS)
+$(KERNEL_BIN): $(KERNEL_ENTRY_OBJ) $(KERNEL_ASM_OBJS) $(KERNEL_OBJS)
 	@echo "[LD   ] → $@"
 	$(LD) $(LDFLAGS) -o $@ $^
 
