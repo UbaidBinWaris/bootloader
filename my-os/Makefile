@@ -1,21 +1,12 @@
-# =============================================================================
-# UbaidOS — Professional Makefile
-# Target: x86, BIOS boot, 32-bit protected mode kernel
-#
-# Usage:
-#   make        — build everything
-#   make run    — build and launch in QEMU
-#   make debug  — build and launch QEMU with GDB server on :1234
-#   make clean  — remove all build artefacts
-# =============================================================================
+SHELL := /usr/bin/env bash
 
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
-NASM    := nasm
-CC      := gcc
-LD      := ld
-QEMU    := qemu-system-i386
+NASM := nasm
+CC := gcc
+LD := ld
+QEMU := qemu-system-i386
 
 # ---------------------------------------------------------------------------
 # Flags
@@ -26,8 +17,8 @@ QEMU    := qemu-system-i386
 # -nostdlib     : do not link against the standard C library
 # -O2           : optimize (safe for freestanding code)
 # -Wall -Wextra : full warnings
-CFLAGS  := -m32 -ffreestanding -fno-pie -fno-stack-protector \
-           -nostdlib -nostdinc -Wall -Wextra -O2
+CFLAGS := -m32 -ffreestanding -fno-pie -fno-stack-protector \
+		  -nostdlib -nostdinc -Wall -Wextra -Werror -O2
 
 LDFLAGS := -m elf_i386 -T kernel/linker.ld --oformat binary
 
@@ -36,48 +27,45 @@ NASMFLAGS := -f bin
 # ---------------------------------------------------------------------------
 # Directories
 # ---------------------------------------------------------------------------
-BUILD   := build
-BOOT    := boot
-KERNEL  := kernel
+BUILD := build
+BOOT := boot
+KERNEL := kernel
 
 # ---------------------------------------------------------------------------
 # Output artefacts
 # ---------------------------------------------------------------------------
-BOOT_BIN    := $(BUILD)/boot.bin
-STAGE2_BIN  := $(BUILD)/stage2.bin
-KERNEL_BIN  := $(BUILD)/kernel.bin
-KERNEL_ELF  := $(BUILD)/kernel.elf
-DISK_IMG    := $(BUILD)/os.img
+BOOT_BIN := $(BUILD)/boot.bin
+STAGE2_BIN := $(BUILD)/stage2.bin
+KERNEL_BIN := $(BUILD)/kernel.bin
+DISK_IMG := $(BUILD)/os.img
 
 # ---------------------------------------------------------------------------
 # Kernel C sources
 # ---------------------------------------------------------------------------
-KERNEL_SRCS := $(KERNEL)/kernel.c    \
-               $(KERNEL)/idt.c       \
-               $(KERNEL)/pic.c       \
-               $(KERNEL)/keyboard.c  \
-               $(KERNEL)/timer.c
+KERNEL_SRCS := $(KERNEL)/kernel.c \
+			   $(KERNEL)/terminal.c \
+			   $(KERNEL)/debug.c \
+			   $(KERNEL)/idt.c \
+			   $(KERNEL)/pic.c \
+			   $(KERNEL)/keyboard.c \
+			   $(KERNEL)/timer.c
 KERNEL_OBJS := $(patsubst $(KERNEL)/%.c, $(BUILD)/%.o, $(KERNEL_SRCS))
 
 # ---------------------------------------------------------------------------
 # Kernel ASM objects (ELF32 — ISR/IRQ stubs)
 # ---------------------------------------------------------------------------
 KERNEL_ENTRY_OBJ := $(BUILD)/kernel_entry.o
-KERNEL_ASM_OBJS  := $(BUILD)/isr.o $(BUILD)/irq.o
+KERNEL_ASM_OBJS := $(BUILD)/isr.o $(BUILD)/irq.o
 
 # ---------------------------------------------------------------------------
 # Default target
 # ---------------------------------------------------------------------------
-.PHONY: all run debug clean
+.PHONY: all build run debug clean test
 
-all: $(DISK_IMG)
-	@echo ""
-	@echo "  ╔══════════════════════════════╗"
-	@echo "  ║   UbaidOS — Build Complete   ║"
-	@echo "  ╚══════════════════════════════╝"
-	@echo "  Disk image: $(DISK_IMG)"
-	@echo "  Run with:   make run"
-	@echo ""
+all: build
+
+build: $(DISK_IMG)
+	@echo "[BUILD] completed: $(DISK_IMG)"
 
 # ---------------------------------------------------------------------------
 # Build directory
@@ -89,46 +77,46 @@ $(BUILD):
 # Stage 1 Bootloader (512 bytes, MBR)
 # ---------------------------------------------------------------------------
 $(BOOT_BIN): $(BOOT)/boot.asm | $(BUILD)
-	@echo "[NASM ] $< → $@"
+	@echo "[NASM ] $< -> $@"
 	$(NASM) $(NASMFLAGS) $< -o $@
 
 # ---------------------------------------------------------------------------
 # Stage 2 Loader (lands at 0x1000, sets up protected mode)
 # ---------------------------------------------------------------------------
 $(STAGE2_BIN): $(BOOT)/stage2.asm | $(BUILD)
-	@echo "[NASM ] $< → $@"
+	@echo "[NASM ] $< -> $@"
 	$(NASM) $(NASMFLAGS) $< -o $@
 
 # ---------------------------------------------------------------------------
 # Kernel entry stub (32-bit ASM glue)
 # ---------------------------------------------------------------------------
 $(KERNEL_ENTRY_OBJ): $(KERNEL)/kernel_entry.asm | $(BUILD)
-	@echo "[NASM ] $< → $@"
+	@echo "[NASM ] $< -> $@"
 	$(NASM) -f elf32 $< -o $@
 
 # ---------------------------------------------------------------------------
 # ISR / IRQ stubs (ELF32)
 # ---------------------------------------------------------------------------
 $(BUILD)/isr.o: $(KERNEL)/isr.asm | $(BUILD)
-	@echo "[NASM ] $< → $@"
+	@echo "[NASM ] $< -> $@"
 	$(NASM) -f elf32 $< -o $@
 
 $(BUILD)/irq.o: $(KERNEL)/irq.asm | $(BUILD)
-	@echo "[NASM ] $< → $@"
+	@echo "[NASM ] $< -> $@"
 	$(NASM) -f elf32 $< -o $@
 
 # ---------------------------------------------------------------------------
 # Kernel C objects
 # ---------------------------------------------------------------------------
 $(BUILD)/%.o: $(KERNEL)/%.c | $(BUILD)
-	@echo "[CC   ] $< → $@"
+	@echo "[CC   ] $< -> $@"
 	$(CC) $(CFLAGS) -c $< -o $@
 
 # ---------------------------------------------------------------------------
 # Link kernel → flat binary
 # ---------------------------------------------------------------------------
 $(KERNEL_BIN): $(KERNEL_ENTRY_OBJ) $(KERNEL_ASM_OBJS) $(KERNEL_OBJS)
-	@echo "[LD   ] → $@"
+	@echo "[LD   ] -> $@"
 	$(LD) $(LDFLAGS) -o $@ $^
 
 # ---------------------------------------------------------------------------
@@ -138,42 +126,45 @@ $(KERNEL_BIN): $(KERNEL_ENTRY_OBJ) $(KERNEL_ASM_OBJS) $(KERNEL_OBJS)
 #   Sector 3+ : kernel.bin
 # ---------------------------------------------------------------------------
 $(DISK_IMG): $(BOOT_BIN) $(STAGE2_BIN) $(KERNEL_BIN)
-	@echo "[IMG  ] assembling disk image → $@"
-	@# Create a clean 1.44 MB floppy image filled with zeros
+	@echo "[IMG  ] assembling disk image -> $@"
 	dd if=/dev/zero of=$@ bs=512 count=2880 status=none
-	@# Write MBR (sector 1)
 	dd if=$(BOOT_BIN)   of=$@ conv=notrunc bs=512 seek=0 status=none
-	@# Write stage2 (sector 2)
 	dd if=$(STAGE2_BIN) of=$@ conv=notrunc bs=512 seek=1 status=none
-	@# Write kernel starting at sector 3
 	dd if=$(KERNEL_BIN) of=$@ conv=notrunc bs=512 seek=2 status=none
-	@echo "[IMG  ] done  (size: $$(stat -c%s $@) bytes)"
+	@echo "[IMG  ] done"
 
 # ---------------------------------------------------------------------------
 # Run in QEMU
 # ---------------------------------------------------------------------------
-run: $(DISK_IMG)
+run: build
 	@echo "[QEMU ] launching UbaidOS..."
 	$(QEMU) \
 		-drive format=raw,file=$(DISK_IMG),if=floppy \
 		-boot a \
 		-m 32M \
 		-name "UbaidOS" \
-		-display sdl \
+		-display gtk \
+		-serial stdio \
+		-monitor none \
 		-no-reboot
 
 # ---------------------------------------------------------------------------
 # Debug mode — attach GDB with: gdb -ex "target remote :1234"
 # ---------------------------------------------------------------------------
-debug: $(DISK_IMG)
+debug: build
 	@echo "[QEMU ] debug mode — GDB server on :1234"
 	$(QEMU) \
 		-drive format=raw,file=$(DISK_IMG),if=floppy \
 		-boot a \
 		-m 32M \
 		-name "UbaidOS [DEBUG]" \
-		-display sdl \
+		-display gtk \
+		-serial stdio \
+		-monitor none \
 		-s -S
+
+test: build
+	@bash scripts/test_all.sh
 
 # ---------------------------------------------------------------------------
 # Clean

@@ -3,17 +3,13 @@
 #include "idt.h"
 #include "pic.h"
 #include "keyboard.h"
+#include "terminal.h"
 
 /* ------------------------------------------------------------------ */
 /*  Hardware constants                                                  */
 /* ------------------------------------------------------------------ */
 #define KB_DATA_PORT    0x60    /* Read scancode / write command data  */
 #define KB_STATUS_PORT  0x64    /* Read status / write command         */
-
-/* ------------------------------------------------------------------ */
-/*  Forward declarations for terminal helpers in kernel.c              */
-/* ------------------------------------------------------------------ */
-extern void terminal_putchar(char c);
 
 /* ------------------------------------------------------------------ */
 /*  Scancode Set 1 → ASCII tables                                       */

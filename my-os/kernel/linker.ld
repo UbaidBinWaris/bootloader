@@ -5,17 +5,36 @@ SECTIONS
 {
     . = 0x2000;
 
-    .text : { *(.text) }
+    _kernel_start = .;
+
+    .text :
+    {
+        *(.text)
+        *(.text.*)
+    }
 
     . = ALIGN(4);
-    .rodata : { *(.rodata) }
+    .rodata :
+    {
+        *(.rodata)
+        *(.rodata.*)
+    }
 
     . = ALIGN(4);
-    .data : { *(.data) }
+    .data :
+    {
+        *(.data)
+        *(.data.*)
+    }
 
     . = ALIGN(4);
     _bss_start = .;
-    .bss  : { *(.bss) *(COMMON) }
+    .bss :
+    {
+        *(.bss)
+        *(.bss.*)
+        *(COMMON)
+    }
     _bss_end = .;
 
     _kernel_end = .;
