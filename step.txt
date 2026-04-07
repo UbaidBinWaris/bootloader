@@ -17,7 +17,7 @@ Install cross compiler:
 
 sudo pacman -S gcc-multilib
 
-Folder structure 
+Folder structure
 
 mkdir my-os
 cd my-os
